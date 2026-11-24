@@ -1,14 +1,26 @@
 {
-  "ok": false,
+  "ok": true,
   "steps": {
     "render": "done",
     "line_messaging": "@428gufyz",
-    "line_login": "done"
+    "line_login": "done",
+    "supabase_project": "hhcubvixldieuwdeqnwc",
+    "database": "done",
+    "liff": "2012782040-gKiAlxK7",
+    "supabase_secrets": "done",
+    "functions": "done",
+    "webhook": {
+      "success": false,
+      "status": 0,
+      "reason": "REQUEST_TIMEOUT"
+    },
+    "owner_menu": "ready",
+    "liff_config": "done"
   },
-  "finished_at": "2026-11-24T17:36:48.918Z",
+  "finished_at": "2026-11-24T17:43:53.239Z",
   "px": "oa5f40db",
   "pages_url": "https://ptgaminglife.github.io/PTtest/",
-  "project_ref": null,
+  "project_ref": "hhcubvixldieuwdeqnwc",
   "basic_id": "@428gufyz",
-  "error": "Supabase 免費方案最多 2 個專案，已經滿了：請在 Variables 設定 OAW_SB_REF 使用既有專案，或到 Supabase 暫停一個不用的專案"
+  "liff_url": "https://liff.line.me/2012782040-gKiAlxK7"
 }
