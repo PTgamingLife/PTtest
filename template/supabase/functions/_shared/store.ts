@@ -1,0 +1,244 @@
+// Database access for one OA app. Table and secret names carry the app prefix,
+// so several OA apps can share one Supabase project.
+import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
+import { PX } from './px.ts';
+import { validateConfig, sha256Hex, type Config } from './logic.ts';
+
+const UP = PX.toUpperCase();
+export const env = (name: string) => Deno.env.get(`${UP}_${name}`) ?? '';
+export const T = (name: string) => `${PX}_${name}`;
+
+export const db = createClient(
+  Deno.env.get('SUPABASE_URL') ?? '',
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+  { auth: { persistSession: false, autoRefreshToken: false } },
+);
+
+/** Pictures uploaded in the 介面設計中心 live in this OA app's own public storage bucket. */
+export const IMAGE_BUCKET = `${PX}-design`;
+export const IMAGE_BASE = `${Deno.env.get('SUPABASE_URL') ?? ''}/storage/v1/object/public/${IMAGE_BUCKET}/`;
+
+export async function loadConfig(): Promise<Config> {
+  const { data, error } = await db.from(T('config')).select('data').eq('id', 1).single();
+  if (error || !data) throw Error('config_missing');
+  return validateConfig(data.data);
+}
+
+/**
+ * Save the settings. Only the 介面設計中心 (`design`) may change the card look and pictures;
+ * every other path (chat edits, the settings page) keeps them as they are.
+ */
+export async function saveConfig(config: Config, design = false) {
+  let clean = validateConfig(config);
+  const now = design ? null : await loadConfig().catch(() => null);
+  if (now)
+    clean = {
+      ...clean,
+      card: now.card,
+      cells: clean.cells.map((c, i) => ({ ...c, img: now.cells[i].img })),
+    };
+  const { error } = await db
+    .from(T('config'))
+    .update({ data: clean, updated_at: new Date().toISOString() })
+    .eq('id', 1);
+  if (error) throw Error('config_save_failed');
+  return clean;
+}
+
+export async function ownerId(): Promise<string> {
+  const { data } = await db.from(T('owner')).select('line_user_id').eq('id', 1).maybeSingle();
+  return data?.line_user_id ?? '';
+}
+
+/** Aprico key: saved by the one-tap connect, or the setup secret for older installs. */
+export async function apricoKey(): Promise<string> {
+  const { data } = await db.from(T('owner')).select('aprico_key').eq('id', 1).maybeSingle();
+  return data?.aprico_key || env('APRICO_KEY');
+}
+
+/**
+ * Save the key from a one-tap connect. The sender becomes the owner when none is bound yet;
+ * an already bound owner can only be refreshed by that same owner. Returns true on success.
+ */
+export async function connectOwner(userId: string, key: string) {
+  if (!/^U[0-9a-f]{32}$/.test(userId)) return false;
+  await db.from(T('owner')).upsert({ id: 1 }, { onConflict: 'id', ignoreDuplicates: true });
+  const { data } = await db
+    .from(T('owner'))
+    .update({ line_user_id: userId, aprico_key: key, bind_hash: null, bind_expires: null })
+    .eq('id', 1)
+    .or(`line_user_id.is.null,line_user_id.eq.${userId}`)
+    .select('id');
+  return Boolean(data?.length);
+}
+
+/** Bind the owner with the one-time code from the build page. Returns true on success. */
+export async function bindOwner(userId: string, code: string) {
+  const { data } = await db
+    .from(T('owner'))
+    .select('line_user_id,bind_hash,bind_expires')
+    .eq('id', 1)
+    .maybeSingle();
+  if (!data || data.line_user_id || !data.bind_hash) return false;
+  if (new Date(data.bind_expires).getTime() < Date.now()) return false;
+  if ((await sha256Hex(code)) !== data.bind_hash) return false;
+  const { data: updated } = await db
+    .from(T('owner'))
+    .update({ line_user_id: userId, bind_hash: null, bind_expires: null })
+    .eq('id', 1)
+    .is('line_user_id', null)
+    .select('id');
+  return Boolean(updated?.length);
+}
+
+export async function upsertMember(userId: string, displayName: string) {
+  await db.from(T('members')).upsert(
+    { line_user_id: userId, display_name: displayName.slice(0, 100) },
+    {
+      onConflict: 'line_user_id',
+      ignoreDuplicates: false,
+    },
+  );
+}
+
+export async function member(userId: string) {
+  const { data } = await db
+    .from(T('members'))
+    .select('member_no,display_name,joined_at')
+    .eq('line_user_id', userId)
+    .maybeSingle();
+  return data;
+}
+
+export async function setPending(userId: string, proposal: unknown) {
+  await db
+    .from(T('pending'))
+    .upsert({ line_user_id: userId, proposal, created_at: new Date().toISOString() });
+}
+
+export async function peekPending(userId: string) {
+  const { data } = await db
+    .from(T('pending'))
+    .select('proposal,created_at')
+    .eq('line_user_id', userId)
+    .maybeSingle();
+  if (!data || Date.now() - new Date(data.created_at).getTime() > 30 * 60 * 1000) return null;
+  return data.proposal;
+}
+
+export async function takePending(userId: string) {
+  const { data } = await db
+    .from(T('pending'))
+    .delete()
+    .eq('line_user_id', userId)
+    .select('proposal,created_at');
+  const row = data?.[0];
+  // Proposals expire after 30 minutes.
+  if (!row || Date.now() - new Date(row.created_at).getTime() > 30 * 60 * 1000) return null;
+  return row.proposal;
+}
+
+/** True only the first time `key` is seen on a Taipei calendar day (stored in the pending table). */
+export async function onceToday(key: string) {
+  const id = `notice:${key}`,
+    day = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const { data } = await db
+    .from(T('pending'))
+    .select('proposal')
+    .eq('line_user_id', id)
+    .maybeSingle();
+  if (data?.proposal?.day === day) return false;
+  await db
+    .from(T('pending'))
+    .upsert({ line_user_id: id, proposal: { day }, created_at: new Date().toISOString() });
+  return true;
+}
+
+/**
+ * Count one use of `key` today (Taipei). Returns how many are left after this one, or -1
+ * when `max` was already reached (nothing is counted then).
+ */
+export async function countToday(key: string, max: number) {
+  const id = `count:${key}`,
+    day = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const { data } = await db
+    .from(T('pending'))
+    .select('proposal')
+    .eq('line_user_id', id)
+    .maybeSingle();
+  const used = data?.proposal?.day === day ? Number(data.proposal.n) || 0 : 0;
+  if (used >= max) return -1;
+  await db
+    .from(T('pending'))
+    .upsert({ line_user_id: id, proposal: { day, n: used + 1 }, created_at: new Date().toISOString() });
+  return max - used - 1;
+}
+
+// ---- Chat auto-record ----
+export async function bindGroup(groupId: string, name = '') {
+  await db.from(T('groups')).upsert({ group_id: groupId, name: name.slice(0, 40) });
+}
+
+export async function groupBound(groupId: string) {
+  const { data } = await db
+    .from(T('groups'))
+    .select('group_id')
+    .eq('group_id', groupId)
+    .maybeSingle();
+  return Boolean(data);
+}
+
+export async function saveMessage(sourceId: string, isOwner: boolean, text: string, sender = '') {
+  await db
+    .from(T('messages'))
+    .insert({ source_id: sourceId, is_owner: isOwner, text: text.slice(0, 500), sender: sender || null });
+}
+
+/** Chats (groups, the owner's own notes) that have unprocessed lines. */
+export async function pendingSources() {
+  const { data } = await db
+    .from(T('messages'))
+    .select('source_id')
+    .is('processed_at', null)
+    .order('sent_at', { ascending: true })
+    .limit(1000);
+  return [...new Set((data ?? []).map((m: { source_id: string }) => m.source_id))];
+}
+
+/** Unprocessed lines of one chat, oldest first, capped to stay within the AI input limit. */
+export async function pendingMessages(maxBytes = 9000, sourceId?: string) {
+  let q = db
+    .from(T('messages'))
+    .select('id,is_owner,text,sent_at')
+    .is('processed_at', null);
+  if (sourceId) q = q.eq('source_id', sourceId);
+  const { data } = await q.order('sent_at', { ascending: true }).limit(300);
+  const out = [];
+  let bytes = 0;
+  for (const m of data ?? []) {
+    bytes += new TextEncoder().encode(m.text).length + 40;
+    if (bytes > maxBytes) break;
+    out.push(m);
+  }
+  return out;
+}
+
+export async function markProcessed(ids: number[]) {
+  if (ids.length)
+    await db.from(T('messages')).update({ processed_at: new Date().toISOString() }).in('id', ids);
+}
+
+export async function saveRecords(rows: Record<string, unknown>[]) {
+  if (rows.length) await db.from(T('records')).insert(rows);
+}
+
+export async function purgeOldMessages(days = 30) {
+  await db
+    .from(T('messages'))
+    .delete()
+    .lt('sent_at', new Date(Date.now() - days * 86400000).toISOString());
+  await db
+    .from(T('link_inbox'))
+    .delete()
+    .lt('created_at', new Date(Date.now() - days * 86400000).toISOString());
+}

@@ -1,0 +1,250 @@
+// Pure logic shared by the OA webhook and LIFF API. No Deno or network APIs here,
+// so it can be unit-tested with Node (`npm test`).
+
+export const THEMES = [
+  ['#BDD0BE', '#DDD5BC', '#B9CCCF', '#D4C2B8'],
+  ['#DDD0B8', '#C7B29E', '#EBE1CE', '#BFC2AF'],
+  ['#B5CAD4', '#CCDADC', '#CEC9BD', '#A7BABE'],
+  ['#D7B8B7', '#E2CCCC', '#C7B7C5', '#D8CDBC'],
+  ['#C9C1D6', '#DCD5E4', '#BEC9D0', '#D3C6C2'],
+  ['#E7C5A8', '#E8D6B6', '#D6C4B9', '#C9D0B4'],
+  ['#A8BDCC', '#A9C9C5', '#C0D4D0', '#D4D3C4'],
+  ['#C3C6C5', '#DCDDD9', '#B7BDBA', '#E7E5DE'],
+];
+
+/** Rich menu cell shapes, drawn by liff/menu-shapes.js. */
+export const SHAPES = ['方塊', '圓角', '拼圖', '拱門', '票券', '花邊'];
+
+export type Cell = {
+  label: string;
+  action: 'message' | 'full' | 'web';
+  content: string;
+  format?: 'text' | 'card';
+  /** Picture drawn on this menu cell (領航者版): a file name in the design image bucket. */
+  img?: string;
+};
+/** Card look (領航者版). `hero` is the picture on top of every card when head is 'image'. */
+export const CARD_HEADS = ['band', 'plain', 'image'] as const;
+export const CARD_SIZES = ['kilo', 'mega', 'giga'] as const;
+export type Card = {
+  head: (typeof CARD_HEADS)[number];
+  size: (typeof CARD_SIZES)[number];
+  hero: string;
+};
+export const IMAGE_NAME = /^[a-z0-9]{16}\.jpg$/;
+const image = (v: unknown, field: string) => {
+  if (v === undefined || v === '') return '';
+  if (typeof v !== 'string' || !IMAGE_NAME.test(v)) throw Error('invalid_' + field);
+  return v;
+};
+export function cleanCard(v: any): Card {
+  if (v === undefined) return { head: 'band', size: 'mega', hero: '' };
+  if (!v || !CARD_HEADS.includes(v.head) || !CARD_SIZES.includes(v.size)) throw Error('invalid_card');
+  return { head: v.head, size: v.size, hero: image(v.hero, 'card_hero') };
+}
+export type Config = {
+  oaName: string;
+  grid: 4 | 6 | 8;
+  theme: number;
+  /** Menu cell shape, index into SHAPES (configs from before shapes default to 0). */
+  shape: number;
+  cells: Cell[];
+  card: Card;
+  welcome: string;
+  failure: string;
+  secretary: boolean;
+};
+
+const str = (v: unknown, max: number, field: string) => {
+  if (typeof v !== 'string' || v.length > max) throw Error('invalid_' + field);
+  return v;
+};
+
+export function validateConfig(value: unknown): Config {
+  const v = value as Config;
+  if (!v || typeof v !== 'object') throw Error('invalid_config');
+  if (![4, 6, 8].includes(v.grid)) throw Error('invalid_grid');
+  if (!Number.isInteger(v.theme) || v.theme < 0 || v.theme >= THEMES.length)
+    throw Error('invalid_theme');
+  const shape = v.shape ?? 0;
+  if (!Number.isInteger(shape) || shape < 0 || shape >= SHAPES.length) throw Error('invalid_shape');
+  if (!Array.isArray(v.cells) || v.cells.length !== 8) throw Error('invalid_cells');
+  const cells = v.cells.map((c) => {
+    if (!c || !['message', 'full', 'web'].includes(c.action)) throw Error('invalid_cell');
+    const content = str(c.content, 1000, 'cell_content');
+    if (c.action === 'web' && content && !/^https:\/\/[^\s]+$/.test(content))
+      throw Error('invalid_cell_url');
+    if (c.format !== undefined && !['text', 'card'].includes(c.format))
+      throw Error('invalid_cell_format');
+    return {
+      label: str(c.label, 20, 'cell_label'),
+      action: c.action,
+      content,
+      format: c.format ?? 'text',
+      img: image(c.img, 'cell_img'),
+    };
+  });
+  return {
+    oaName: str(v.oaName, 40, 'oa_name'),
+    grid: v.grid,
+    theme: v.theme,
+    shape,
+    cells,
+    card: cleanCard(v.card),
+    welcome: str(v.welcome, 500, 'welcome'),
+    failure: str(v.failure, 300, 'failure'),
+    secretary: v.secretary === true,
+  };
+}
+
+const b64 = (bytes: ArrayBuffer) => {
+  let s = '';
+  for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
+  return btoa(s);
+};
+
+/** LINE webhook signature: base64(HMAC-SHA256(channelSecret, rawBody)). */
+export async function verifySignature(secret: string, body: string, signature: string | null) {
+  if (!secret || !signature) return false;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const expected = b64(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)));
+  if (expected.length !== signature.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++)
+    diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  return diff === 0;
+}
+
+export async function sha256Hex(text: string) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export type Intent =
+  | { kind: 'bind'; code: string }
+  | { kind: 'connect'; code: string }
+  | { kind: 'cell'; index: number }
+  | { kind: 'apply' }
+  | { kind: 'cancel' }
+  | { kind: 'design'; request: string }
+  | { kind: 'secretary' }
+  | { kind: 'fallback' };
+
+/** Decide what a text message means. Owner-only intents are ignored for other users. */
+export function textIntent(text: string, config: Config, isOwner: boolean): Intent {
+  const t = text.trim();
+  if (/^\d{6}$/.test(t)) return { kind: 'bind', code: t };
+  // One-tap connect from the Aprico OA: 「連接 ABCDEFGHJK」.
+  const connect = t.match(/^連接\s*([A-HJ-NP-Z2-9]{10})$/i);
+  if (connect) return { kind: 'connect', code: connect[1].toUpperCase() };
+  if (isOwner && t === '套用') return { kind: 'apply' };
+  if (isOwner && t === '取消') return { kind: 'cancel' };
+  const design = t.match(/^(?:設計|修改)[:：\s]\s*(.+)$/s);
+  if (isOwner && design) return { kind: 'design', request: design[1].trim() };
+  const index = config.cells.slice(0, config.grid).findIndex((c) => c.label && c.label === t);
+  if (index >= 0) return { kind: 'cell', index };
+  return config.secretary ? { kind: 'secretary' } : { kind: 'fallback' };
+}
+
+export function postbackCell(data: string, config: Config) {
+  const m = /^cell=(\d)$/.exec(data);
+  const index = m ? Number(m[1]) : -1;
+  return index >= 0 && index < config.grid ? index : -1;
+}
+
+/**
+ * Reply message for a menu cell. `imageBase` is the public URL prefix of the design image
+ * bucket; without it (or without a picture) an 'image' card falls back to the colour band.
+ */
+export function cellMessage(config: Config, index: number, imageBase = '') {
+  const cell = config.cells[index];
+  const text = cell.content || config.failure;
+  if (cell.format !== 'card') return { type: 'text', text: text.slice(0, 5000) };
+  const color = THEMES[config.theme][index % 4];
+  const { head, size, hero } = config.card;
+  const title = { type: 'text', text: cell.label || config.oaName, weight: 'bold', size: 'lg', wrap: true };
+  const picture = head === 'image' && hero && imageBase;
+  const band = head === 'band' || (head === 'image' && !picture);
+  return {
+    type: 'flex',
+    altText: (cell.label || config.oaName).slice(0, 400),
+    contents: {
+      type: 'bubble',
+      size,
+      ...(band
+        ? { header: { type: 'box', layout: 'vertical', backgroundColor: color, contents: [title] } }
+        : {}),
+      ...(picture
+        ? {
+            hero: {
+              type: 'image',
+              url: imageBase + hero,
+              size: 'full',
+              aspectRatio: '20:13',
+              aspectMode: 'cover',
+            },
+          }
+        : {}),
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        contents: band ? [{ type: 'text', text, wrap: true }] : [title, { type: 'text', text, wrap: true }],
+      },
+    },
+  };
+}
+
+export const MENU_SIZE = { width: 1200, height: 810 };
+
+export function menuAreas(grid: number) {
+  const columns = grid === 6 ? 3 : 2,
+    rows = grid / columns,
+    width = MENU_SIZE.width / columns;
+  return Array.from({ length: grid }, (_, index) => {
+    const row = Math.floor(index / columns),
+      top = Math.floor((row * MENU_SIZE.height) / rows),
+      bottom = Math.floor(((row + 1) * MENU_SIZE.height) / rows);
+    return { index, bounds: { x: (index % columns) * width, y: top, width, height: bottom - top } };
+  });
+}
+
+/** Rich menu definition. `liffUrl` is https://liff.line.me/{liffId}. */
+export function richMenu(config: Config, px: string, liffUrl: string) {
+  return {
+    size: MENU_SIZE,
+    selected: true,
+    name: `${px}-main`,
+    chatBarText: (config.oaName || '選單').slice(0, 14),
+    areas: menuAreas(config.grid).map(({ index, bounds }) => {
+      const cell = config.cells[index],
+        label = (cell.label || `功能 ${index + 1}`).slice(0, 20);
+      const action =
+        cell.action === 'web' && cell.content
+          ? { type: 'uri', label, uri: cell.content }
+          : cell.action === 'full'
+            ? { type: 'uri', label, uri: `${liffUrl}?cell=${index}` }
+            : { type: 'postback', label, data: `cell=${index}`, displayText: label };
+      return { bounds, action };
+    }),
+  };
+}
+
+/** Public part of the config sent to the LIFF page (no owner or internal data). */
+export function publicConfig(config: Config) {
+  return {
+    oaName: config.oaName,
+    grid: config.grid,
+    theme: config.theme,
+    colors: THEMES[config.theme],
+    shape: config.shape,
+    cells: config.cells.slice(0, config.grid),
+    card: config.card,
+  };
+}
