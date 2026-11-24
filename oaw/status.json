@@ -5,10 +5,10 @@
     "line_messaging": "@428gufyz",
     "line_login": "done"
   },
-  "finished_at": "2026-11-24T17:11:24.455Z",
+  "finished_at": "2026-11-24T17:28:08.515Z",
   "px": "oa5f40db",
   "pages_url": "https://ptgaminglife.github.io/PTtest/",
   "project_ref": null,
   "basic_id": "@428gufyz",
-  "error": "Supabase Token 不能用（HTTP 403：Missing required permission(s): organizations_read）：請到 Supabase 的 Access Tokens 重新產生一組再試一次"
+  "error": "Supabase 免費方案最多 2 個專案，已經滿了：請在 Variables 設定 OAW_SB_REF 使用既有專案，或到 Supabase 暫停一個不用的專案"
 }
