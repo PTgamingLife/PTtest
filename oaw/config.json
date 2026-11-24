@@ -1,8 +1,8 @@
 {
-  "oaName": "我的皮可",
+  "oaName": "我的 AI 秘書",
   "grid": 4,
   "theme": 0,
-  "welcome": "謝謝你加入「我的皮可」！點下方選單就能開始使用。",
+  "welcome": "謝謝你加入「我的 AI 秘書」！點下方選單就能開始使用。",
   "failure": "這個問題我還不會回答，請稍後由專人回覆你。",
   "secretary": true,
   "cells": [
