@@ -10,14 +10,14 @@
     "supabase_secrets": "done",
     "functions": "done",
     "webhook": {
-      "success": false,
-      "status": 0,
-      "reason": "REQUEST_TIMEOUT"
+      "success": true,
+      "status": 200,
+      "reason": "OK"
     },
     "owner_menu": "ready",
     "liff_config": "done"
   },
-  "finished_at": "2026-11-24T17:43:53.239Z",
+  "finished_at": "2026-11-24T18:16:04.823Z",
   "px": "oa5f40db",
   "pages_url": "https://ptgaminglife.github.io/PTtest/",
   "project_ref": "hhcubvixldieuwdeqnwc",
