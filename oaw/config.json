@@ -1,12 +1,17 @@
 {
-  "oaName": "我的官方帳號",
+  "oaName": "我的皮可",
   "grid": 4,
   "theme": 0,
-  "welcome": "謝謝你加入好友！點下方選單就能開始使用。",
+  "welcome": "謝謝你加入「我的皮可」！點下方選單就能開始使用。",
   "failure": "這個問題我還不會回答，請稍後由專人回覆你。",
-  "secretary": false,
+  "secretary": true,
   "cells": [
-    { "label": "會員卡", "action": "full", "content": "", "format": "text" },
+    {
+      "label": "會員卡",
+      "action": "full",
+      "content": "",
+      "format": "text"
+    },
     {
       "label": "關於我們",
       "action": "message",
@@ -25,9 +30,29 @@
       "content": "請直接留言，我們會盡快回覆你。",
       "format": "text"
     },
-    { "label": "", "action": "message", "content": "", "format": "text" },
-    { "label": "", "action": "message", "content": "", "format": "text" },
-    { "label": "", "action": "message", "content": "", "format": "text" },
-    { "label": "", "action": "message", "content": "", "format": "text" }
+    {
+      "label": "",
+      "action": "message",
+      "content": "",
+      "format": "text"
+    },
+    {
+      "label": "",
+      "action": "message",
+      "content": "",
+      "format": "text"
+    },
+    {
+      "label": "",
+      "action": "message",
+      "content": "",
+      "format": "text"
+    },
+    {
+      "label": "",
+      "action": "message",
+      "content": "",
+      "format": "text"
+    }
   ]
 }
