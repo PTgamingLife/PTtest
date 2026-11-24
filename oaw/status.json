@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "steps": {
+    "render": "done",
+    "line_messaging": "@428gufyz",
+    "line_login": "done"
+  },
+  "finished_at": "2026-11-24T16:19:35.937Z",
+  "px": "oa5f40db",
+  "pages_url": "https://ptgaminglife.github.io/PTtest/",
+  "project_ref": null,
+  "basic_id": "@428gufyz",
+  "error": "Supabase Token 沒有建立專案的權限：請改用帳號層級的 Access Token，或在 Variables 設定 OAW_SB_REF 使用既有專案"
+}
